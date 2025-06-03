@@ -8,7 +8,7 @@ API_BASE_URL = "https://ppe-detection.azuhri-dev.com/api"  # Ganti dengan base U
 ALERT_ENDPOINT = "/violation"      # Ganti dengan endpoint API untuk mengirim alert
 
 # Fungsi untuk mengirim alert via API
-def send_alert_via_api(location_id, image_path):
+def send_alert_via_api(location_id, image_path, class_label_detection):
     """
     Mengirimkan data alert (location_id dan capture_image sebagai form data) ke API.
 
@@ -33,8 +33,13 @@ def send_alert_via_api(location_id, image_path):
 
         with open(image_path, 'rb') as img_file:
             files = {'capture': (filename, img_file, mime_type)}
-            data = {'location_id': location_id}
-            headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36"}
+            data = {
+            'location_id': location_id,
+            'class_label_detection': class_label_detection
+            }
+            headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36"
+            }
 
             response = requests.post(f"{API_BASE_URL}{ALERT_ENDPOINT}", headers=headers, data=data, files=files)
             response.raise_for_status()  # Raise an exception for bad status codes

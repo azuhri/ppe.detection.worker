@@ -57,13 +57,22 @@ def fetch_video_sources(BASE_DIR):
                     video_sources.append({
                         "location_id": data.get('id', 0),
                         "location": data.get("name", "Lokasi Tidak Diketahui"),
-                        "file_path": os.path.join(BASE_DIR, "/", f"{data.get('content', '')}")
+                        "file_path": os.path.join(BASE_DIR, "/", f"{data.get('content', '')}"),
+                        "data_source_type": "video_file"
                     })
                 elif data.get("data_source_type") == "rtsp_link":
                     video_sources.append({
                         "location_id": data.get('id', 0),
                         "location": data.get("name", "Lokasi Tidak Diketahui"),
-                        "file_path": data.get("content", "")
+                        "file_path": data.get("content", ""),
+                        "data_source_type": "rtsp_link"
+                    })
+                elif data.get("data_source_type") == "camera":
+                    video_sources.append({
+                        "location_id": data.get('id', 0),
+                        "location": data.get("name", "Lokasi Tidak Diketahui"),
+                        "file_path": str(data.get("content", "0")),
+                        "data_source_type": "camera"
                     })
             elif isinstance(location_data["data"], list):
                 for location_info in location_data["data"]:
@@ -71,20 +80,29 @@ def fetch_video_sources(BASE_DIR):
                         video_sources.append({
                             "location_id": location_info.get('id', 0),
                             "location": location_info.get("name", "Lokasi Tidak Diketahui"),
-                            "file_path": f"{location_info.get('content', '')}"
+                            "file_path": f"{location_info.get('content', '')}",
+                            "data_source_type": "video_file"
                         })
                     elif location_info.get("data_source_type") == "rtsp_link":
                         video_sources.append({
                             "location_id": location_info.get('id', 0),
                             "location": location_info.get("name", "Lokasi Tidak Diketahui"),
-                            "file_path": location_info.get("content", "")
+                            "file_path": location_info.get("content", ""),
+                            "data_source_type": "rtsp_link"
                         })
-            print(f"📍 Data lokasi (sumber video/rtsp) berhasil diambil dari API: {video_sources}")
+                    elif location_info.get("data_source_type") == "camera":
+                        video_sources.append({
+                            "location_id": location_info.get('id', 0),
+                            "location": location_info.get("name", "Lokasi Tidak Diketahui"),
+                            "file_path": str(location_info.get("content", "0")),
+                            "data_source_type": "camera"
+                        })
+            print(f"📍 Data lokasi (sumber video/rtsp/camera) berhasil diambil dari API: {video_sources}")
         else:
-            print("⚠️ Data lokasi (sumber video/rtsp) dari API tidak valid atau kosong.")
+            print("⚠️ Data lokasi (sumber video/rtsp/camera) dari API tidak valid atau kosong.")
             
     except requests.exceptions.RequestException as e:
-        print(f"❌ Gagal mengambil data lokasi (sumber video/rtsp) dari API: {e}")
+        print(f"❌ Gagal mengambil data lokasi (sumber video/rtsp/camera) dari API: {e}")
 
     return video_sources
 
@@ -105,7 +123,81 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
     file_path = source["file_path"]
     data_source_type = source.get("data_source_type", "")
     is_rtsp = file_path.startswith("rtsp://")
-    is_mjpeg = data_source_type == "mjpeg" or file_path.startswith("http") and "mjpg" in file_path.lower()
+    is_mjpeg = data_source_type == "mjpeg" or (file_path.startswith("http") and "mjpg" in file_path.lower())
+    is_camera = data_source_type == "camera" or (str(file_path).isdigit() and int(file_path) >= 0)
+
+    if is_camera:
+        camera_index = int(file_path)
+        cap = cv2.VideoCapture(camera_index)
+        if not cap.isOpened():
+            print(f"❌ Tidak dapat membuka kamera dengan index {camera_index} untuk lokasi {location}")
+            return
+        print(f"🚀 Memproses kamera index {camera_index} untuk lokasi: {location}")
+        frame_count = 0
+        window_name = f"Deteksi - {location}"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print(f"⚠️ Tidak dapat membaca frame dari kamera {camera_index} ({location}). Selesai.")
+                break
+
+            frame_count += 1
+            results = model(frame, verbose=False, conf=threshold)
+            boxes = results[0].boxes
+            detected_classes_in_frame = set()
+            annotated_frame = results[0].plot()
+
+            if boxes is None or boxes.cls is None or len(boxes.cls) == 0:
+                print(f"[{location} - Frame {frame_count}] ❌ Tidak ada deteksi.")
+                sys.stdout.flush()
+                for cls in target_classes:
+                    detection_counts[location][cls] = 0
+                cv2.imshow(window_name, frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+                continue
+
+            detected_labels = set()
+            for box in boxes:
+                cls_id = int(box.cls.item())
+                conf = box.conf.item()
+                class_name = model.names[cls_id]
+                print(f"[{location} - Frame {frame_count}] ➤ Class terdeteksi: {class_name} (Confidence: {conf:.2f})")
+                sys.stdout.flush()
+
+                if class_name in target_classes:
+                    detected_classes_in_frame.add(class_name)
+                    detected_labels.add(class_name)
+                    last_detection_frame[location][class_name] = annotated_frame
+
+            for cls in target_classes:
+                if cls in detected_classes_in_frame:
+                    detection_counts[location][cls] += 1
+                    print(f"[{location} - Frame {frame_count}] ⚠️ '{cls}' terdeteksi (hitungan: {detection_counts[location][cls]})")
+                    sys.stdout.flush()
+                else:
+                    detection_counts[location][cls] = 0
+
+                if detection_counts[location][cls] >= times_checking_perframe and last_detection_frame[location][cls] is not None:
+                    alert_image_path = f"capture_{location.replace(' ', '_')}_{cls.replace(' ', '_')}.jpg"
+                    cv2.imwrite(alert_image_path, last_detection_frame[location][cls])
+
+                    detected_labels_str = ", ".join(sorted(detected_labels))
+                    print(f"[{location} - Frame {frame_count}] 📧 Terdeteksi {times_checking_perframe} kali '{cls}'! Mengirim alert via API... Label terdeteksi: {detected_labels_str}")
+                    detection_counts[location][cls] = 0
+                    sys.stdout.flush()
+
+                    send_alert_via_api(location_id, alert_image_path, detected_labels_str)
+
+            cv2.imshow(window_name, annotated_frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+        cap.release()
+        cv2.destroyWindow(window_name)
+        return
 
     if not (is_rtsp or is_mjpeg) and not os.path.exists(file_path):
         print(f"❌ File video tidak ditemukan: {file_path} untuk lokasi {location}")
@@ -166,6 +258,8 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
                     return
                 continue
 
+            # Kumpulkan class label yang terdeteksi di frame ini
+            detected_labels = set()
             for box in boxes:
                 cls_id = int(box.cls.item())
                 conf = box.conf.item()
@@ -175,6 +269,7 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
 
                 if class_name in target_classes:
                     detected_classes_in_frame.add(class_name)
+                    detected_labels.add(class_name)
                     last_detection_frame[location][class_name] = annotated_frame
 
             for cls in target_classes:
@@ -189,11 +284,13 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
                     alert_image_path = f"capture_{location.replace(' ', '_')}_{cls.replace(' ', '_')}.jpg"
                     cv2.imwrite(alert_image_path, last_detection_frame[location][cls])
 
-                    print(f"[{location} - Frame {frame_count}] 📧 Terdeteksi {times_checking_perframe} kali '{cls}'! Mengirim alert via API...")
+                    # Format label yang terdeteksi di frame ini, pisahkan dengan koma
+                    detected_labels_str = ", ".join(sorted(detected_labels))
+                    print(f"[{location} - Frame {frame_count}] 📧 Terdeteksi {times_checking_perframe} kali '{cls}'! Mengirim alert via API... Label terdeteksi: {detected_labels_str}")
                     detection_counts[location][cls] = 0
                     sys.stdout.flush()
 
-                    send_alert_via_api(location_id, alert_image_path)
+                    send_alert_via_api(location_id, alert_image_path, detected_labels_str)
 
             cv2.imshow(window_name, annotated_frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
