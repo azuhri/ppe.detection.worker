@@ -5,6 +5,7 @@ from ultralytics import YOLO
 import os
 import cv2
 import time
+import threading
 
 headers = {
     "User-Agent" : "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36",
@@ -43,6 +44,7 @@ def fetch_model_config():
     return threshold, times_checking_perframe
 
 def fetch_video_sources(BASE_DIR):
+    # ... (tidak berubah, kode sama seperti sebelumnya)
     video_sources = []
     try:
         print("ENDPOINT: ", API_BASE_URL)
@@ -117,7 +119,18 @@ def initialize_detection_dicts(video_sources, target_classes):
         last_detection_frame[location] = {cls: None for cls in target_classes}
     return email_sent_status, detection_counts, last_detection_frame
 
+def process_video_source_thread(source, model, threshold, times_checking_perframe, target_classes, detection_counts, last_detection_frame):
+    # Bungkus process_video_source agar bisa dipanggil di thread
+    try:
+        process_video_source(
+            source, model, threshold, times_checking_perframe,
+            target_classes, detection_counts, last_detection_frame
+        )
+    except Exception as e:
+        print(f"❌ Exception in thread for source {source.get('location', '')}: {e}")
+
 def process_video_source(source, model, threshold, times_checking_perframe, target_classes, detection_counts, last_detection_frame):
+    # ... (kode sama seperti sebelumnya, tanpa cv2.namedWindow/cv2.imshow/cv2.destroyWindow)
     location = source["location"]
     location_id = source.get("location_id", 0)
     file_path = source["file_path"]
@@ -134,8 +147,6 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
             return
         print(f"🚀 Memproses kamera index {camera_index} untuk lokasi: {location}")
         frame_count = 0
-        window_name = f"Deteksi - {location}"
-        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
         while True:
             ret, frame = cap.read()
@@ -154,9 +165,6 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
                 sys.stdout.flush()
                 for cls in target_classes:
                     detection_counts[location][cls] = 0
-                cv2.imshow(window_name, frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
                 continue
 
             detected_labels = set()
@@ -191,19 +199,13 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
 
                     send_alert_via_api(location_id, alert_image_path, detected_labels_str)
 
-            cv2.imshow(window_name, annotated_frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-
         cap.release()
-        cv2.destroyWindow(window_name)
         return
 
     if not (is_rtsp or is_mjpeg) and not os.path.exists(file_path):
         print(f"❌ File video tidak ditemukan: {file_path} untuk lokasi {location}")
         return
 
-    # Untuk RTSP/MJPEG, tambahkan retry dan reconnect
     max_retries = 5 if (is_rtsp or is_mjpeg) else 1
     retry_delay = 3  # detik
 
@@ -224,8 +226,6 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
                 return
         print(f"🚀 Memproses {'RTSP stream' if is_rtsp else ('MJPEG stream' if is_mjpeg else 'video')} dari: {location} ({file_path})")
         frame_count = 0
-        window_name = f"Deteksi - {location}"
-        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
         while True:
             ret, frame = cap.read()
@@ -235,7 +235,7 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
                     print("Mencoba reconnect...")
                     cap.release()
                     time.sleep(retry_delay)
-                    break  # keluar dari while, masuk ke retry berikutnya
+                    break
                 else:
                     print("Selesai memproses video.")
                     break
@@ -251,14 +251,8 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
                 sys.stdout.flush()
                 for cls in target_classes:
                     detection_counts[location][cls] = 0
-                cv2.imshow(window_name, frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    cap.release()
-                    cv2.destroyWindow(window_name)
-                    return
                 continue
 
-            # Kumpulkan class label yang terdeteksi di frame ini
             detected_labels = set()
             for box in boxes:
                 cls_id = int(box.cls.item())
@@ -284,7 +278,6 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
                     alert_image_path = f"capture_{location.replace(' ', '_')}_{cls.replace(' ', '_')}.jpg"
                     cv2.imwrite(alert_image_path, last_detection_frame[location][cls])
 
-                    # Format label yang terdeteksi di frame ini, pisahkan dengan koma
                     detected_labels_str = ", ".join(sorted(detected_labels))
                     print(f"[{location} - Frame {frame_count}] 📧 Terdeteksi {times_checking_perframe} kali '{cls}'! Mengirim alert via API... Label terdeteksi: {detected_labels_str}")
                     detection_counts[location][cls] = 0
@@ -292,15 +285,7 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
 
                     send_alert_via_api(location_id, alert_image_path, detected_labels_str)
 
-            cv2.imshow(window_name, annotated_frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                cap.release()
-                cv2.destroyWindow(window_name)
-                return
-
         cap.release()
-        cv2.destroyWindow(window_name)
-        # Jika RTSP/MJPEG, coba reconnect, jika bukan, selesai
         if not (is_rtsp or is_mjpeg):
             break
 
@@ -312,15 +297,23 @@ def detectionWithSources():
     print(video_sources)
     email_sent_status, detection_counts, last_detection_frame = initialize_detection_dicts(video_sources, target_classes)
 
+    threads = []
     for source in video_sources:
-        process_video_source(
-            source, model, threshold, times_checking_perframe,
-            target_classes, detection_counts, last_detection_frame
+        t = threading.Thread(
+            target=process_video_source_thread,
+            args=(source, model, threshold, times_checking_perframe, target_classes, detection_counts, last_detection_frame)
         )
+        t.daemon = True
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join()
 
     print("✅ Selesai memproses semua video.")
 
 def detectionWithCamera(camera_index=0):
+    # ... (tidak berubah, kode sama seperti sebelumnya)
     model, BASE_DIR = load_model()
     threshold, times_checking_perframe = fetch_model_config()
     target_classes = ["unhelmet", "no wear vest", "no wear safetyboot"]
