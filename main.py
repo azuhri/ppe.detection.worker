@@ -129,8 +129,19 @@ def process_video_source_thread(source, model, threshold, times_checking_perfram
     except Exception as e:
         print(f"❌ Exception in thread for source {source.get('location', '')}: {e}")
 
+def show_detection_window(window_name, frame, status=False):
+    """
+    Menampilkan frame hasil deteksi ke window OpenCV.
+    """
+    if status == True: 
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.imshow(window_name, frame)
+        # Tekan 'q' untuk keluar dari window
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            return False
+    return True
+
 def process_video_source(source, model, threshold, times_checking_perframe, target_classes, detection_counts, last_detection_frame):
-    # ... (kode sama seperti sebelumnya, tanpa cv2.namedWindow/cv2.imshow/cv2.destroyWindow)
     location = source["location"]
     location_id = source.get("location_id", 0)
     file_path = source["file_path"]
@@ -138,6 +149,8 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
     is_rtsp = file_path.startswith("rtsp://")
     is_mjpeg = data_source_type == "mjpeg" or (file_path.startswith("http") and "mjpg" in file_path.lower())
     is_camera = data_source_type == "camera" or (str(file_path).isdigit() and int(file_path) >= 0)
+
+    window_name = f"Deteksi - {location}"
 
     if is_camera:
         camera_index = int(file_path)
@@ -165,6 +178,8 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
                 sys.stdout.flush()
                 for cls in target_classes:
                     detection_counts[location][cls] = 0
+                if not show_detection_window(window_name, frame):
+                    break
                 continue
 
             detected_labels = set()
@@ -199,7 +214,11 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
 
                     send_alert_via_api(location_id, alert_image_path, detected_labels_str)
 
+            if not show_detection_window(window_name, annotated_frame):
+                break
+
         cap.release()
+        cv2.destroyWindow(window_name)
         return
 
     if not (is_rtsp or is_mjpeg) and not os.path.exists(file_path):
@@ -251,6 +270,8 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
                 sys.stdout.flush()
                 for cls in target_classes:
                     detection_counts[location][cls] = 0
+                if not show_detection_window(window_name, frame):
+                    break
                 continue
 
             detected_labels = set()
@@ -285,7 +306,11 @@ def process_video_source(source, model, threshold, times_checking_perframe, targ
 
                     send_alert_via_api(location_id, alert_image_path, detected_labels_str)
 
+            if not show_detection_window(window_name, annotated_frame):
+                break
+
         cap.release()
+        cv2.destroyWindow(window_name)
         if not (is_rtsp or is_mjpeg):
             break
 
@@ -309,6 +334,10 @@ def detectionWithSources():
 
     for t in threads:
         t.join()
+    # for source in video_sources:
+    #     process_video_source_thread(
+    #         source, model, threshold, times_checking_perframe, target_classes, detection_counts, last_detection_frame
+    #     )
 
     print("✅ Selesai memproses semua video.")
 
