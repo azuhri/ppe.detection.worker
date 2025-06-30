@@ -129,7 +129,7 @@ def process_video_source_thread(source, model, threshold, times_checking_perfram
     except Exception as e:
         print(f"❌ Exception in thread for source {source.get('location', '')}: {e}")
 
-def show_detection_window(window_name, frame, status=False):
+def show_detection_window(window_name, frame, status=True):
     """
     Menampilkan frame hasil deteksi ke window OpenCV.
     """
@@ -137,9 +137,9 @@ def show_detection_window(window_name, frame, status=False):
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.imshow(window_name, frame)
         # Tekan 'q' untuk keluar dari window
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if cv2.waitKey(1) & 0xF == ord('q'):
             return False
-    return True
+    return True 
 
 def process_video_source(source, model, threshold, times_checking_perframe, target_classes, detection_counts, last_detection_frame):
     location = source["location"]
@@ -322,22 +322,22 @@ def detectionWithSources():
     print(video_sources)
     email_sent_status, detection_counts, last_detection_frame = initialize_detection_dicts(video_sources, target_classes)
 
-    threads = []
-    for source in video_sources:
-        t = threading.Thread(
-            target=process_video_source_thread,
-            args=(source, model, threshold, times_checking_perframe, target_classes, detection_counts, last_detection_frame)
-        )
-        t.daemon = True
-        t.start()
-        threads.append(t)
-
-    for t in threads:
-        t.join()
+    # threads = []
     # for source in video_sources:
-    #     process_video_source_thread(
-    #         source, model, threshold, times_checking_perframe, target_classes, detection_counts, last_detection_frame
+    #     t = threading.Thread(
+    #         target=process_video_source_thread,
+    #         args=(source, model, threshold, times_checking_perframe, target_classes, detection_counts, last_detection_frame)
     #     )
+    #     t.daemon = True
+    #     t.start()
+    #     threads.append(t)
+
+    # for t in threads:
+    #     t.join()
+    for source in video_sources:
+        process_video_source_thread(
+            source, model, threshold, times_checking_perframe, target_classes, detection_counts, last_detection_frame
+        )
 
     print("✅ Selesai memproses semua video.")
 
