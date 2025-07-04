@@ -2,6 +2,8 @@ import requests
 import json
 import os
 import platform
+from queue import Queue
+import threading
 
 # Konfigurasi API
 API_BASE_URL = "https://ppe-detection.azuhri-dev.com/api"  # Ganti dengan base URL API Anda
@@ -24,16 +26,27 @@ def play_alarm_sound():
     except Exception as e:
         print(f"❌ Error playing alert sound: {e}")
 
+# Queue untuk menyimpan alert yang akan dikirim
+alert_queue = Queue()
+
+def alert_worker():
+    while True:
+        item = alert_queue.get()
+        if item is None:
+            break  # Stop signal
+        location_id, image_path, class_label_detection = item
+        _send_alert_via_api(location_id, image_path, class_label_detection)
+        alert_queue.task_done()
+
 def send_alert_via_api(location_id, image_path, class_label_detection):
     """
-    Mengirimkan data alert (location_id dan capture_image sebagai form data) ke API.
+    Menambahkan data alert ke queue untuk diproses secara asynchronous.
+    """
+    alert_queue.put((location_id, image_path, class_label_detection))
 
-    Args:
-        location_id (int): ID lokasi tempat deteksi terjadi.
-        image_path (str): Path ke file gambar hasil capture.
-
-    Returns:
-        bool: True jika pengiriman berhasil, False jika gagal.
+def _send_alert_via_api(location_id, image_path, class_label_detection):
+    """
+    Fungsi internal untuk mengirimkan data alert ke API (dipanggil oleh worker thread).
     """
     try:
         # Determine the filename and MIME type based on how you saved the image
@@ -69,10 +82,14 @@ def send_alert_via_api(location_id, image_path, class_label_detection):
         return False
     except requests.exceptions.RequestException as e:
         print(f"❌ Gagal mengirim alert ke API: {e}")
-        if response is not None:
+        if 'response' in locals() and response is not None:
             print(f"   Response status code: {response.status_code}")
             try:
                 print(f"   Response body: {response.json()}")
             except json.JSONDecodeError:
                 print(f"   Response body: {response.text}")
         return False
+
+# Jalankan worker thread saat modul diimport
+worker_thread = threading.Thread(target=alert_worker, daemon=True)
+worker_thread.start()
